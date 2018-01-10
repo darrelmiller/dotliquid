@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Threading;
+using System.Linq;
 using NUnit.Framework;
 
 namespace DotLiquid.Tests
@@ -118,10 +119,37 @@ namespace DotLiquid.Tests
         [Test]
         public void TestSort()
         {
+            Assert.AreEqual(null, StandardFilters.Sort(null));
             CollectionAssert.AreEqual(new string[] { }, StandardFilters.Sort(new string[] { }));
             CollectionAssert.AreEqual(new[] { 1, 2, 3, 4 }, StandardFilters.Sort(new[] { 4, 3, 2, 1 }));
             CollectionAssert.AreEqual(new[] { new { a = 1 }, new { a = 2 }, new { a = 3 }, new { a = 4 } },
                 StandardFilters.Sort(new[] { new { a = 4 }, new { a = 3 }, new { a = 1 }, new { a = 2 } }, "a"));
+        }
+
+        [Test]
+        public void TestSort_OnHashList_WithProperty_DoesNotFlattenList()
+        {
+            var list = new System.Collections.Generic.List<Hash>();
+            var hash1 = CreateHash("1", "Text1");
+            var hash2 = CreateHash("2", "Text2");
+            var hash3 = CreateHash("3", "Text3");
+            list.Add(hash3);
+            list.Add(hash1);
+            list.Add(hash2);
+
+            var result = StandardFilters.Sort(list, "sortby").Cast<Hash>().ToArray();
+            Assert.AreEqual(3, result.Count());
+            Assert.AreEqual(hash1["content"], result[0]["content"]);
+            Assert.AreEqual(hash2["content"], result[1]["content"]);
+            Assert.AreEqual(hash3["content"], result[2]["content"]);
+        }
+
+        private static Hash CreateHash(string sortby, string content)
+        {
+            var hash = new Hash();
+            hash.Add("sortby", sortby);
+            hash.Add("content", content);
+            return hash;
         }
 
         [Test]
@@ -143,6 +171,32 @@ namespace DotLiquid.Tests
                     }));
             CollectionAssert.AreEqual(new[] { new { a = 1 }, new { a = 2 }, new { a = 3 }, new { a = 4 } },
                 StandardFilters.Map(new[] { new { a = 1 }, new { a = 2 }, new { a = 3 }, new { a = 4 } }, "b"));
+
+            Assert.AreEqual(null, StandardFilters.Map(null, "a"));
+            CollectionAssert.AreEqual(new object[] { null }, StandardFilters.Map(new object[] { null }, "a"));
+
+            var hash = Hash.FromAnonymousObject(new {
+                ary = new[] {
+                    new Helper.DataObject { PropAllowed = "a", PropDisallowed = "x" },
+                    new Helper.DataObject { PropAllowed = "b", PropDisallowed = "y" },
+                    new Helper.DataObject { PropAllowed = "c", PropDisallowed = "z" },
+                }
+            });
+
+            Helper.AssertTemplateResult("abc", "{{ ary | map:'prop_allowed' | join:'' }}", hash);
+            Helper.AssertTemplateResult("", "{{ ary | map:'prop_disallowed' | join:'' }}", hash);
+
+            hash = Hash.FromAnonymousObject(new
+            {
+                ary = new[] {
+                    new Helper.DataObjectDrop { Prop = "a" },
+                    new Helper.DataObjectDrop { Prop = "b" },
+                    new Helper.DataObjectDrop { Prop = "c" },
+                }
+            });
+
+            Helper.AssertTemplateResult("abc", "{{ ary | map:'prop' | join:'' }}", hash);
+            Helper.AssertTemplateResult("", "{{ ary | map:'no_prop' | join:'' }}", hash);
         }
 
         [TestCase("6.72", "$6.72")]
@@ -222,8 +276,10 @@ namespace DotLiquid.Tests
             Assert.AreEqual(dateTimeFormat.GetMonthName(6), StandardFilters.Date("2006-06-05 10:00:00", "MMMM"));
             Assert.AreEqual(dateTimeFormat.GetMonthName(7), StandardFilters.Date("2006-07-05 10:00:00", "MMMM"));
 
-            Assert.AreEqual("05/07/2006 10:00:00", StandardFilters.Date("05/07/2006 10:00:00", string.Empty));
-            Assert.AreEqual("05/07/2006 10:00:00", StandardFilters.Date("05/07/2006 10:00:00", null));
+            Assert.AreEqual("08/01/2006 10:00:00", StandardFilters.Date("08/01/2006 10:00:00", string.Empty));
+            Assert.AreEqual("08/02/2006 10:00:00", StandardFilters.Date("08/02/2006 10:00:00", null));
+            Assert.AreEqual(new DateTime(2006, 8, 3, 10, 0, 0).ToString(), StandardFilters.Date(new DateTime(2006, 8, 3, 10, 0, 0), string.Empty));
+            Assert.AreEqual(new DateTime(2006, 8, 4, 10, 0, 0).ToString(), StandardFilters.Date(new DateTime(2006, 8, 4, 10, 0, 0), null));
 
             Assert.AreEqual(new DateTime(2006, 7, 5).ToString("MM/dd/yyyy"), StandardFilters.Date("2006-07-05 10:00:00", "MM/dd/yyyy"));
 
@@ -237,6 +293,13 @@ namespace DotLiquid.Tests
             Assert.AreEqual(DateTime.Now.ToString("MM/dd/yyyy"), StandardFilters.Date("today", "MM/dd/yyyy"));
             Assert.AreEqual(DateTime.Now.ToString("MM/dd/yyyy"), StandardFilters.Date("Now", "MM/dd/yyyy"));
             Assert.AreEqual(DateTime.Now.ToString("MM/dd/yyyy"), StandardFilters.Date("Today", "MM/dd/yyyy"));
+
+            Assert.AreEqual(DateTime.Now.ToString(), StandardFilters.Date("now", null));
+            Assert.AreEqual(DateTime.Now.ToString(), StandardFilters.Date("today", null));
+            Assert.AreEqual(DateTime.Now.ToString(), StandardFilters.Date("now", string.Empty));
+            Assert.AreEqual(DateTime.Now.ToString(), StandardFilters.Date("today", string.Empty));
+
+            Assert.AreEqual("345000", StandardFilters.Date(DateTime.Parse("2006-05-05 10:00:00.345"), "ffffff"));
 
             Template template = Template.Parse(@"{{ hi | date:""MMMM"" }}");
             Assert.AreEqual("hi", template.Render(Hash.FromAnonymousObject(new { hi = "hi" })));
@@ -258,6 +321,8 @@ namespace DotLiquid.Tests
 
             Assert.AreEqual("05/07/2006 10:00:00", StandardFilters.Date("05/07/2006 10:00:00", string.Empty));
             Assert.AreEqual("05/07/2006 10:00:00", StandardFilters.Date("05/07/2006 10:00:00", null));
+            Assert.AreEqual(new DateTime(2006, 8, 3, 10, 0, 0).ToString(), StandardFilters.Date(new DateTime(2006, 8, 3, 10, 0, 0), string.Empty));
+            Assert.AreEqual(new DateTime(2006, 8, 4, 10, 0, 0).ToString(), StandardFilters.Date(new DateTime(2006, 8, 4, 10, 0, 0), null));
 
             Assert.AreEqual("07/05/2006", StandardFilters.Date("2006-07-05 10:00:00", "%m/%d/%Y"));
 
@@ -430,6 +495,19 @@ namespace DotLiquid.Tests
             Helper.AssertTemplateResult("5", "{{ 15 | divided_by:3 }}");
             Assert.Null(StandardFilters.DividedBy(null, 3));
             Assert.Null(StandardFilters.DividedBy(4, null));
+        }
+
+        [Test]
+        public void TestInt32DividedByInt64 ()
+        {
+            int a = 20;
+            long b = 5;
+            var c = a / b;
+            Assert.AreEqual( c, (long)4 );
+
+
+            Hash assigns = Hash.FromAnonymousObject(new { a = a, b = b});
+            Helper.AssertTemplateResult("4", "{{ a | divided_by:b }}", assigns);
         }
 
         [Test]

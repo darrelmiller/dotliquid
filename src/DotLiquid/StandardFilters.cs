@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Text.RegularExpressions;
+using System.Reflection;
 using DotLiquid.Util;
 
 namespace DotLiquid
@@ -296,11 +297,14 @@ namespace DotLiquid
         /// <returns></returns>
         public static IEnumerable Sort(object input, string property = null)
         {
+            if (input == null)
+                return null;
+
             List<object> ary;
-            if (input is IEnumerable enumerableInput)
-            { 
+            if(input is IEnumerable<Hash> enumerableHash && !string.IsNullOrEmpty(property))
+                ary = enumerableHash.Cast<object>().ToList();
+            else if (input is IEnumerable enumerableInput)
                 ary = enumerableInput.Flatten().Cast<object>().ToList();
-            }
             else
             { 
                 ary = new List<object>(new[] { input });
@@ -333,16 +337,42 @@ namespace DotLiquid
         /// <returns></returns>
         public static IEnumerable Map(IEnumerable input, string property)
         {
+            if (input == null)
+                return null;
+
             List<object> ary = input.Cast<object>().ToList();
             if (!ary.Any())
                 return ary;
 
             if ((ary.All(o => o is IDictionary)) && ((IDictionary)ary.First()).Contains(property))
                 return ary.Select(e => ((IDictionary)e)[property]);
-            if (ary.All(o => o.RespondTo(property)))
-                return ary.Select(e => e.Send(property));
 
-            return ary;
+            return ary.Select(e => {
+                if (e == null)
+                    return null;
+
+                var drop = e as DropBase;
+                if (drop == null)
+                {
+                    var type = e.GetType();
+                    var safeTypeTransformer = Template.GetSafeTypeTransformer(type);
+                    if (safeTypeTransformer != null)
+                        drop = safeTypeTransformer(e) as DropBase;
+                    else
+                    {
+                        var attr = type.GetTypeInfo().GetCustomAttributes(typeof(LiquidTypeAttribute), false).FirstOrDefault() as LiquidTypeAttribute;
+                        if (attr != null)
+                        {
+                            drop = new DropProxy(e, attr.AllowedMembers);
+                        }
+                        else if (TypeUtility.IsAnonymousType(type))
+                        {
+                            return e.RespondTo(property) ? e.Send(property) : e;
+                        }
+                    }
+                }
+                return (drop?.ContainsKey(property) ?? false) ? drop[property] : null;
+            });
         }
 
         /// <summary>
@@ -457,26 +487,36 @@ namespace DotLiquid
         /// <returns></returns>
         public static string Date(object input, string format)
         {
-            string value;
-
             if (input == null)
                 return null;
 
-            value = input.ToString();
-
-            if (format.IsNullOrWhiteSpace())
-                return value;
-
             DateTime date;
+            if (input is DateTime)
+            {
+                date = (DateTime)input;
 
-            if (string.Equals(value, "now", StringComparison.OrdinalIgnoreCase) || string.Equals(value, "today", StringComparison.OrdinalIgnoreCase))
-            {
-                date = DateTime.Now;
+                if (format.IsNullOrWhiteSpace())
+                    return date.ToString();
             }
-            else if (!DateTime.TryParse(value, out date))
-            {
-                return value;
-            }
+			else
+			{
+				string value = input.ToString();
+
+				if (string.Equals(value, "now", StringComparison.OrdinalIgnoreCase) || string.Equals(value, "today", StringComparison.OrdinalIgnoreCase))
+				{
+					date = DateTime.Now;
+
+                    if (format.IsNullOrWhiteSpace())
+                        return date.ToString();
+				}
+				else if (!DateTime.TryParse(value, out date))
+				{
+					return value;
+				}
+
+                if (format.IsNullOrWhiteSpace())
+                    return value;
+			}
 
             return Liquid.UseRubyDateFormat ? date.ToStrFTime(format) : date.ToString(format);
         }
@@ -617,7 +657,9 @@ namespace DotLiquid
             }
 
             return ExpressionUtility.CreateExpression
-                                    (operation, input.GetType(), operand.GetType(), input.GetType(), true)
+                                    ( body: operation
+                                      , leftType: input.GetType()
+                                      , rightType: operand.GetType() )
                                     .DynamicInvoke(input, operand);
         }
     }
